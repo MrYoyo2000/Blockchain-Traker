@@ -1,6 +1,7 @@
 import os
 import requests
 import time
+import sys
 import pandas as pd
 from datetime import datetime
 from collections import deque
@@ -43,6 +44,7 @@ class UltraBlockchainTracker:
         self.running = True
         self.lock = threading.Lock()
         self.last_update = datetime.now()
+        self.last_eth_block = None  # Keep track of the last scanned block
 
     def add_transaction(self, tx_data):
         """Ajoute une transaction"""
@@ -96,43 +98,73 @@ class UltraBlockchainTracker:
             print(f"⚠️ Erreur prix: {e}")
 
     def scan_etherscan_pending(self):
-        """Scan les pending transactions Etherscan"""
+        """Scan les pending transactions Etherscan using web3-like approach"""
         print("🔍 Démarrage scan Etherscan pending...")
+
+        rpc_endpoints = [
+            "https://eth.llamarpc.com",
+            "https://eth.rpc.blxrbdn.com",
+            "https://rpc.flashbots.net"
+        ]
+        current_endpoint_idx = 0
 
         while self.running:
             try:
-                # Get block number
-                response = requests.get(
-                    "https://api.etherscan.io/v2/api?chainid=1&action=balance&apikey=YourEtherscanApiKey",
-                    params={
-                        "module": "proxy",
-                        "action": "eth_blockNumber",
-                        "apikey": self.eth_api_key
-                    },
-                    timeout=5
-                )
+                rpc_url = rpc_endpoints[current_endpoint_idx]
 
-                block_num = int(response.json()['result'], 16)
-                print(f"📦 Block actuel: {block_num}")
+                # Get block number if not already set
+                if self.last_eth_block is None:
+                    payload = {
+                        "jsonrpc": "2.0",
+                        "method": "eth_blockNumber",
+                        "params": [],
+                        "id": 1
+                    }
+                    response = requests.post(rpc_url, json=payload, timeout=5)
+                    response.raise_for_status()
+
+                    try:
+                        data = response.json()
+                    except ValueError:
+                        print(f"⚠️ Invalid JSON from {rpc_url}, trying next endpoint...")
+                        current_endpoint_idx = (current_endpoint_idx + 1) % len(rpc_endpoints)
+                        time.sleep(2)
+                        continue
+
+                    result = data.get('result')
+                    if result and isinstance(result, str) and result.startswith('0x'):
+                        self.last_eth_block = int(result, 16)
+                        print(f"📦 Starting from block: {self.last_eth_block}")
+                    else:
+                        print(f"⚠️ Failed to get block number: {data}")
+                        time.sleep(5)
+                        continue
+
+                # Get next block number
+                next_block = self.last_eth_block + 1
+                block_hex = hex(next_block)
 
                 # Get block transactions
-                response = requests.get(
-                    "https://api.etherscan.io/v2/api?chainid=1&action=balance&apikey=YourEtherscanApiKey",
-                    params={
-                        "module": "proxy",
-                        "action": "eth_getBlockByNumber",
-                        "tag": hex(block_num),
-                        "boolean": "true",
-                        "apikey": self.eth_api_key
-                    },
-                    timeout=5
-                )
+                payload = {
+                    "jsonrpc": "2.0",
+                    "method": "eth_getBlockByNumber",
+                    "params": [block_hex, True],
+                    "id": 1
+                }
+                response = requests.post(rpc_url, json=payload, timeout=5)
+                response.raise_for_status()
 
-                block_data = response.json().get('result', {})
+                try:
+                    block_data = response.json().get('result', {})
+                except ValueError:
+                    print(f"⚠️ Invalid JSON response, trying next endpoint...")
+                    current_endpoint_idx = (current_endpoint_idx + 1) % len(rpc_endpoints)
+                    time.sleep(2)
+                    continue
 
                 if block_data and 'transactions' in block_data:
                     txs = block_data['transactions']
-                    print(f"✅ {len(txs)} transactions dans le block {block_num}")
+                    print(f"✅ {len(txs)} transactions dans le block {next_block}")
 
                     for tx in txs:
                         try:
@@ -150,15 +182,26 @@ class UltraBlockchainTracker:
                                 'value': value_eth,
                                 'usd': value_eth * self.prices['ETH'],
                                 'hash': tx.get('hash', 'N/A'),
-                                'block': block_num
+                                'block': next_block
                             }
 
                             self.add_transaction(tx_data)
                         except Exception as e:
                             continue
 
+                    # Update last scanned block
+                    self.last_eth_block = next_block
+                else:
+                    # If the block is empty, wait a bit
+                    time.sleep(5)
+
                 time.sleep(10)  # Wait pour nouveau block (~12 sec)
 
+            except requests.exceptions.RequestException as e:
+                print(f"❌ Request error ({rpc_endpoints[current_endpoint_idx]}): {e}")
+                current_endpoint_idx = (current_endpoint_idx + 1) % len(rpc_endpoints)
+                self.stats['errors'] += 1
+                time.sleep(5)
             except Exception as e:
                 print(f"❌ Erreur Etherscan: {e}")
                 self.stats['errors'] += 1
@@ -385,10 +428,14 @@ class UltraBlockchainTracker:
                 time.sleep(30)
                 self.get_prices()
         except KeyboardInterrupt:
+            print("\nShutting down scanner...")
             self.running = False
-            print("\n\n🛑 ARRÊT")
-            print(f"📊 Total: {self.stats['total_tx']} TX | Whales: {self.stats['whales']}")
+            # Small delay to allow threads to notice the flag
+            time.sleep(1)
 
+        finally:
+            # Ensure all threads are stopped
+            self.running = False
 
 if __name__ == "__main__":
     print("\n⚡ ULTRA BLOCKCHAIN TRACKER v2.0\n")
