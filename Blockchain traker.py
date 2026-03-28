@@ -6,6 +6,10 @@ import pandas as pd
 from datetime import datetime
 from collections import deque
 import threading
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # === Configuration ===
 ETHERSCAN_API_KEY = os.getenv("ETHERSCAN_API_KEY", "WGJ2Z5USQYMT8SKQXMCKRG8Z58TMX1NZMB")
