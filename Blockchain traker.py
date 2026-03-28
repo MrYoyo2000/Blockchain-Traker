@@ -10,10 +10,10 @@ import threading
 # === Configuration ===
 ETHERSCAN_API_KEY = os.getenv("ETHERSCAN_API_KEY", "WGJ2Z5USQYMT8SKQXMCKRG8Z58TMX1NZMB")
 
-# Seuils WHALE
+# WHALE Thresholds
 WHALE_THRESHOLD = {
-    'ETH': 0.1,  # BAISSÉ pour voir plus de whales
-    'BTC': 0.5,  # BAISSÉ pour voir plus de whales
+    'ETH': 0.1,  # Lowered to detect more whales
+    'BTC': 0.5,  # Lowered to detect more whales
 }
 
 
@@ -22,16 +22,16 @@ class UltraBlockchainTracker:
     def __init__(self, eth_api_key=None):
         self.eth_api_key = eth_api_key
 
-        # Stockage
-        self.all_transactions = deque(maxlen=500)
-        self.whale_transactions = deque(maxlen=100)
-        self.normal_transactions = deque(maxlen=100)
+        # Storage
+        self.all_transactions = deque(maxlen=1000)
+        self.whale_transactions = deque(maxlen=200)
+        self.normal_transactions = deque(maxlen=200)
         self.seen_hashes = set()
 
-        # Prix
+        # Prices
         self.prices = {'ETH': 3200, 'BTC': 98000}
 
-        # Stats
+        # Statistics
         self.stats = {
             'total_tx': 0,
             'whales': 0,
@@ -47,7 +47,7 @@ class UltraBlockchainTracker:
         self.last_eth_block = None  # Keep track of the last scanned block
 
     def add_transaction(self, tx_data):
-        """Ajoute une transaction"""
+        """Add a transaction to the tracker"""
         with self.lock:
             tx_hash = tx_data.get('hash', '')
 
@@ -56,11 +56,11 @@ class UltraBlockchainTracker:
 
             self.seen_hashes.add(tx_hash)
 
-            # Classification
+            # Classify transaction
             is_whale = tx_data['value'] >= WHALE_THRESHOLD.get(tx_data['chain'], 999999)
             tx_data['type'] = '🐋' if is_whale else '📊'
 
-            # Ajout
+            # Add to storage
             self.all_transactions.append(tx_data)
 
             if is_whale:
@@ -83,7 +83,7 @@ class UltraBlockchainTracker:
             return True
 
     def get_prices(self):
-        """Récupère les prix"""
+        """Fetch current cryptocurrency prices"""
         try:
             response = requests.get(
                 "https://api.coingecko.com/api/v3/simple/price",
@@ -93,13 +93,13 @@ class UltraBlockchainTracker:
             data = response.json()
             self.prices['ETH'] = data.get('ethereum', {}).get('usd', 3200)
             self.prices['BTC'] = data.get('bitcoin', {}).get('usd', 98000)
-            print(f"✅ Prix mis à jour: ETH ${self.prices['ETH']:,.0f} | BTC ${self.prices['BTC']:,.0f}")
+            print(f"✅ Prices updated: ETH ${self.prices['ETH']:,.0f} | BTC ${self.prices['BTC']:,.0f}")
         except Exception as e:
-            print(f"⚠️ Erreur prix: {e}")
+            print(f"⚠️ Price fetch error: {e}")
 
     def scan_etherscan_pending(self):
-        """Scan les pending transactions Etherscan using web3-like approach"""
-        print("🔍 Démarrage scan Etherscan pending...")
+        """Scan Ethereum pending transactions using JSON-RPC approach"""
+        print("🔍 Starting Etherscan pending scan...")
 
         rpc_endpoints = [
             "https://eth.llamarpc.com",
@@ -164,7 +164,7 @@ class UltraBlockchainTracker:
 
                 if block_data and 'transactions' in block_data:
                     txs = block_data['transactions']
-                    print(f"✅ {len(txs)} transactions dans le block {next_block}")
+                    print(f"✅ {len(txs)} transactions in block {next_block}")
 
                     for tx in txs:
                         try:
@@ -195,7 +195,7 @@ class UltraBlockchainTracker:
                     # If the block is empty, wait a bit
                     time.sleep(5)
 
-                time.sleep(10)  # Wait pour nouveau block (~12 sec)
+                time.sleep(10)  # Wait for next block (~12 sec)
 
             except requests.exceptions.RequestException as e:
                 print(f"❌ Request error ({rpc_endpoints[current_endpoint_idx]}): {e}")
@@ -203,13 +203,13 @@ class UltraBlockchainTracker:
                 self.stats['errors'] += 1
                 time.sleep(5)
             except Exception as e:
-                print(f"❌ Erreur Etherscan: {e}")
+                print(f"❌ Etherscan error: {e}")
                 self.stats['errors'] += 1
                 time.sleep(5)
 
     def scan_bitcoin_mempool(self):
-        """Scan Bitcoin mempool"""
-        print("🔍 Démarrage scan Bitcoin mempool...")
+        """Scan Bitcoin mempool for transactions"""
+        print("🔍 Starting Bitcoin mempool scan...")
 
         while self.running:
             try:
@@ -217,7 +217,7 @@ class UltraBlockchainTracker:
                 response = requests.get("https://blockstream.info/api/mempool/recent", timeout=5)
                 txs = response.json()
 
-                print(f"💰 {len(txs)} transactions BTC récupérées")
+                print(f"💰 {len(txs)} BTC transactions retrieved")
 
                 for tx in txs[:50]:
                     try:
@@ -227,11 +227,21 @@ class UltraBlockchainTracker:
                         if btc_value < 0.001:
                             continue
 
+                        # Get first input and output addresses
+                        from_addr = "Unknown"
+                        to_addr = "Unknown"
+
+                        if tx.get('vin') and len(tx['vin']) > 0:
+                            from_addr = tx['vin'][0].get('prevout', {}).get('scriptpubkey_address', 'Unknown')
+
+                        if tx.get('vout') and len(tx['vout']) > 0:
+                            to_addr = tx['vout'][0].get('scriptpubkey_address', 'Unknown')
+
                         tx_data = {
                             'time': datetime.now().strftime('%H:%M:%S'),
                             'chain': 'BTC',
-                            'from': f"{len(tx.get('vin', []))} inputs",
-                            'to': f"{len(tx.get('vout', []))} outputs",
+                            'from': from_addr if from_addr != 'Unknown' else f"{len(tx.get('vin', []))} inputs",
+                            'to': to_addr if to_addr != 'Unknown' else f"{len(tx.get('vout', []))} outputs",
                             'value': btc_value,
                             'usd': btc_value * self.prices['BTC'],
                             'hash': tx.get('txid', 'N/A'),
@@ -245,13 +255,13 @@ class UltraBlockchainTracker:
                 time.sleep(5)
 
             except Exception as e:
-                print(f"❌ Erreur Bitcoin: {e}")
+                print(f"❌ Bitcoin error: {e}")
                 self.stats['errors'] += 1
                 time.sleep(5)
 
     def scan_blockchain_info(self):
-        """Scan blockchain.info (source alternative)"""
-        print("🔍 Démarrage scan Blockchain.info...")
+        """Scan blockchain.info for unconfirmed transactions (alternative source)"""
+        print("🔍 Starting Blockchain.info scan...")
 
         while self.running:
             try:
@@ -262,7 +272,7 @@ class UltraBlockchainTracker:
                 data = response.json()
 
                 txs = data.get('txs', [])
-                print(f"🌐 {len(txs)} TX blockchain.info")
+                print(f"🌐 {len(txs)} TXs from blockchain.info")
 
                 for tx in txs[:30]:
                     try:
@@ -271,11 +281,21 @@ class UltraBlockchainTracker:
                         if btc_value < 0.001:
                             continue
 
+                        # Get first input and output addresses
+                        from_addr = "Unknown"
+                        to_addr = "Unknown"
+
+                        if tx.get('inputs') and len(tx['inputs']) > 0:
+                            from_addr = tx['inputs'][0].get('prev_out', {}).get('addr', 'Unknown')
+
+                        if tx.get('out') and len(tx['out']) > 0:
+                            to_addr = tx['out'][0].get('addr', 'Unknown')
+
                         tx_data = {
                             'time': datetime.now().strftime('%H:%M:%S'),
                             'chain': 'BTC',
-                            'from': 'Multiple',
-                            'to': 'Multiple',
+                            'from': from_addr if from_addr != 'Unknown' else 'Multiple',
+                            'to': to_addr if to_addr != 'Unknown' else 'Multiple',
                             'value': btc_value,
                             'usd': btc_value * self.prices['BTC'],
                             'hash': str(tx.get('hash', 'N/A')),
@@ -289,129 +309,184 @@ class UltraBlockchainTracker:
                 time.sleep(8)
 
             except Exception as e:
-                print(f"❌ Erreur Blockchain.info: {e}")
+                print(f"❌ Blockchain.info error: {e}")
                 self.stats['errors'] += 1
                 time.sleep(10)
 
     def display_dashboard(self):
-        """Dashboard avec debug"""
-        print("🖥️  Démarrage dashboard...")
-        time.sleep(5)  # Attend un peu avant d'afficher
+        """Display live dashboard with transaction data"""
+        print("🖥️  Starting dashboard...")
+        time.sleep(5)  # Wait a bit before displaying
 
         while self.running:
             try:
                 os.system('clear' if os.name == 'posix' else 'cls')
 
-                print("╔" + "═" * 148 + "╗")
-                print("║" + " ⚡ ULTRA BLOCKCHAIN TRACKER - LIVE ⚡ ".center(148) + "║")
-                print("╚" + "═" * 148 + "╝")
+                print("╔" + "═" * 200 + "╗")
+                print("║" + " ⚡ ULTRA BLOCKCHAIN TRACKER - LIVE ⚡ ".center(200) + "║")
+                print("╚" + "═" * 200 + "╝")
                 print()
 
-                # Stats
+                # Statistics
                 elapsed = (datetime.now() - self.last_update).total_seconds()
-                status = "🟢 ACTIF" if elapsed < 30 else "🟡 ATTENTE"
+                status = "🟢 ACTIVE" if elapsed < 30 else "🟡 WAITING"
 
                 print(f"💰 ETH: ${self.prices['ETH']:,.0f} | BTC: ${self.prices['BTC']:,.0f}")
                 print(
                     f"📊 Total: {self.stats['total_tx']} TX | 🐋 Whales: {self.stats['whales']} | 📊 Normal: {self.stats['normal']} | {status}")
                 print(
-                    f"📈 Vol: ETH {self.stats['eth_vol']:.2f} | BTC {self.stats['btc_vol']:.4f} | ❌ Erreurs: {self.stats['errors']}")
-                print(f"⚙️  Seuils: ETH ≥{WHALE_THRESHOLD['ETH']} | BTC ≥{WHALE_THRESHOLD['BTC']}")
-                print(f"🕐 Dernière TX: il y a {elapsed:.0f}s")
+                    f"📈 Volume: ETH {self.stats['eth_vol']:.2f} | BTC {self.stats['btc_vol']:.4f} | ❌ Errors: {self.stats['errors']}")
+                print(f"⚙️  Thresholds: ETH ≥{WHALE_THRESHOLD['ETH']} | BTC ≥{WHALE_THRESHOLD['BTC']}")
+                print(f"🕐 Last TX: {elapsed:.0f}s ago")
                 print()
-
-                # FLUX LIVE
-                print("⚡" + "═" * 147 + "⚡")
-                print(" TOUTES LES TRANSACTIONS (40 dernières)".center(149))
-                print("⚡" + "═" * 147 + "⚡")
 
                 with self.lock:
-                    recent = list(self.all_transactions)[-40:]
+                    all_recent = list(self.all_transactions)
 
-                if recent:
-                    data = [{
-                        'T': tx['type'],
-                        'Heure': tx['time'],
-                        'Chain': tx['chain'],
-                        'De': tx['from'][:12] + '..',
-                        'Vers': tx['to'][:12] + '..',
-                        'Montant': f"{tx['value']:.6f}",
-                        'USD': f"${tx['usd']:,.0f}",
-                        'Hash': tx['hash'][:12] + '..'
-                    } for tx in recent]
+                # Get last 100 transactions and separate by chain
+                eth_txs = [tx for tx in all_recent if tx['chain'] == 'ETH'][-100:]
+                btc_txs = [tx for tx in all_recent if tx['chain'] == 'BTC'][-100:]
 
-                    df = pd.DataFrame(data)
-                    print(df.to_string(index=False))
-                else:
-                    print("⏳ En attente de transactions...".center(149))
-                    print("   (Ça peut prendre 10-30 secondes au démarrage)".center(149))
+                # ETHEREUM - Large amounts
+                eth_large = [tx for tx in eth_txs if tx['value'] >= 1.0]
+                eth_small = [tx for tx in eth_txs if tx['value'] < 1.0]
 
-                print()
+                if eth_large:
+                    print("═" * 200)
+                    print("💎 ETHEREUM - LARGE TRANSACTIONS (≥ 1.0 ETH)")
+                    print("═" * 200)
+                    print()
 
-                # WHALES
-                print("🐋" + "═" * 147 + "🐋")
-                print(f" WHALES (ETH ≥{WHALE_THRESHOLD['ETH']} | BTC ≥{WHALE_THRESHOLD['BTC']})".center(149))
-                print("🐋" + "═" * 147 + "🐋")
+                    for tx in eth_large[-20:]:
+                        print(f"  🔴 {tx['time']}  │  {tx['value']:.6f} ETH = ${tx['usd']:,.2f}")
+                        print(f"  ├─ FROM: {tx['from']}")
+                        print(f"  ├─ TO:   {tx['to']}")
+                        print(f"  └─ HASH: {tx['hash']}")
+                        print()
 
+                # ETHEREUM - Small amounts
+                if eth_small:
+                    print("═" * 200)
+                    print("💎 ETHEREUM - NORMAL TRANSACTIONS (< 1.0 ETH)")
+                    print("═" * 200)
+                    print()
+
+                    for tx in eth_small[-20:]:
+                        print(f"  ⚪ {tx['time']}  │  {tx['value']:.6f} ETH = ${tx['usd']:,.2f}")
+                        print(f"  ├─ FROM: {tx['from']}")
+                        print(f"  ├─ TO:   {tx['to']}")
+                        print(f"  └─ HASH: {tx['hash']}")
+                        print()
+
+                # BITCOIN - Large amounts
+                btc_large = [tx for tx in btc_txs if tx['value'] >= 0.5]
+                btc_small = [tx for tx in btc_txs if tx['value'] < 0.5]
+
+                if btc_large:
+                    print("═" * 200)
+                    print("₿ BITCOIN - LARGE TRANSACTIONS (≥ 0.5 BTC)")
+                    print("═" * 200)
+                    print()
+
+                    for tx in btc_large[-20:]:
+                        print(f"  🔴 {tx['time']}  │  {tx['value']:.6f} BTC = ${tx['usd']:,.2f}")
+                        print(f"  ├─ FROM: {tx['from']}")
+                        print(f"  ├─ TO:   {tx['to']}")
+                        print(f"  └─ HASH: {tx['hash']}")
+                        print()
+
+                # BITCOIN - Small amounts
+                if btc_small:
+                    print("═" * 200)
+                    print("₿ BITCOIN - NORMAL TRANSACTIONS (< 0.5 BTC)")
+                    print("═" * 200)
+                    print()
+
+                    for tx in btc_small[-20:]:
+                        print(f"  ⚪ {tx['time']}  │  {tx['value']:.6f} BTC = ${tx['usd']:,.2f}")
+                        print(f"  ├─ FROM: {tx['from']}")
+                        print(f"  ├─ TO:   {tx['to']}")
+                        print(f"  └─ HASH: {tx['hash']}")
+                        print()
+
+                if not eth_txs and not btc_txs:
+                    print("⏳ Waiting for transactions...".center(200))
+                    print("   (This may take 10-30 seconds at startup)".center(200))
+                    print()
+
+                # WHALES SECTION
                 with self.lock:
-                    whales = list(self.whale_transactions)[-20:]
+                    all_whales = list(self.whale_transactions)
 
-                if whales:
-                    data = [{
-                        'Heure': tx['time'],
-                        'Chain': tx['chain'],
-                        'De': tx['from'][:12] + '..',
-                        'Vers': tx['to'][:12] + '..',
-                        'Montant': f"{tx['value']:.6f}",
-                        'USD': f"${tx['usd']:,.0f}",
-                        'Hash': tx['hash'][:12] + '..'
-                    } for tx in whales]
+                if all_whales:
+                    eth_whales = [tx for tx in all_whales if tx['chain'] == 'ETH'][-10:]
+                    btc_whales = [tx for tx in all_whales if tx['chain'] == 'BTC'][-10:]
 
-                    df = pd.DataFrame(data)
-                    print(df.to_string(index=False))
-                else:
-                    print("⏳ Aucune whale détectée pour le moment...".center(149))
+                    if eth_whales or btc_whales:
+                        print("═" * 200)
+                        print("🐋 WHALE ALERTS")
+                        print("═" * 200)
+                        print()
 
-                print()
-                print("─" * 150)
+                        if eth_whales:
+                            print("💎 ETHEREUM WHALES")
+                            print("─" * 200)
+                            for tx in eth_whales:
+                                print(f"  🚨 {tx['time']}  │  AMOUNT: {tx['value']:.4f} ETH = ${tx['usd']:,.2f}")
+                                print(f"     ├─ FROM: {tx['from']}")
+                                print(f"     ├─ TO:   {tx['to']}")
+                                print(f"     └─ HASH: {tx['hash']}")
+                                print()
+
+                        if btc_whales:
+                            print("₿ BITCOIN WHALES")
+                            print("─" * 200)
+                            for tx in btc_whales:
+                                print(f"  🚨 {tx['time']}  │  AMOUNT: {tx['value']:.4f} BTC = ${tx['usd']:,.2f}")
+                                print(f"     ├─ FROM: {tx['from']}")
+                                print(f"     ├─ TO:   {tx['to']}")
+                                print(f"     └─ HASH: {tx['hash']}")
+                                print()
+
+                print("═" * 200)
                 print(f"🕐 {datetime.now().strftime('%H:%M:%S')} | Refresh: 3 sec | Ctrl+C = Stop")
-                print("─" * 150)
+                print("═" * 200)
 
                 time.sleep(3)
 
             except Exception as e:
-                print(f"❌ Erreur dashboard: {e}")
+                print(f"❌ Dashboard error: {e}")
                 time.sleep(3)
 
     def run(self):
-        """Lance tout"""
+        """Start all scanning threads and main loop"""
         print("\n" + "═" * 150)
         print("⚡ ULTRA BLOCKCHAIN TRACKER".center(150))
         print("═" * 150)
         print()
 
         if not self.eth_api_key:
-            print("⚠️  Pas de clé Etherscan!")
+            print("⚠️  No Etherscan key configured!")
             return
 
-        print(f"✅ Clé: {self.eth_api_key[:10]}...")
+        print(f"✅ Key: {self.eth_api_key[:10]}...")
         print()
 
-        # Get prix
-        print("📊 Chargement des prix...")
+        # Load prices
+        print("📊 Loading prices...")
         self.get_prices()
         print()
 
-        print("🚀 Lancement des scanners...")
+        print("🚀 Launching scanners...")
         print("   • Etherscan (blocks)")
         print("   • Bitcoin Blockstream")
         print("   • Bitcoin Blockchain.info")
         print("   • Dashboard")
         print()
-        print("⏳ Les premières transactions arrivent dans 10-30 secondes...")
+        print("⏳ First transactions will arrive in 10-30 seconds...")
         print()
 
-        # Lance threads
+        # Start scanner threads
         threads = [
             threading.Thread(target=self.scan_etherscan_pending, daemon=True),
             threading.Thread(target=self.scan_bitcoin_mempool, daemon=True),
@@ -422,7 +497,7 @@ class UltraBlockchainTracker:
         for t in threads:
             t.start()
 
-        # Main loop avec update prix
+        # Main loop with price updates
         try:
             while self.running:
                 time.sleep(30)
@@ -441,18 +516,18 @@ if __name__ == "__main__":
     print("\n⚡ ULTRA BLOCKCHAIN TRACKER v2.0\n")
 
     if not ETHERSCAN_API_KEY:
-        print("❌ ERREUR: Configure ETHERSCAN_API_KEY!")
+        print("❌ ERROR: Configure ETHERSCAN_API_KEY!")
         exit(1)
 
-    print(f"✅ Clé: {ETHERSCAN_API_KEY[:10]}...{ETHERSCAN_API_KEY[-4:]}")
-    print(f"\n⚙️  Seuils: ETH ≥{WHALE_THRESHOLD['ETH']} | BTC ≥{WHALE_THRESHOLD['BTC']}")
+    print(f"✅ Key: {ETHERSCAN_API_KEY[:10]}...{ETHERSCAN_API_KEY[-4:]}")
+    print(f"\n⚙️  Thresholds: ETH ≥{WHALE_THRESHOLD['ETH']} | BTC ≥{WHALE_THRESHOLD['BTC']}")
     print("\n💡 TIPS:")
-    print("   • Attends 10-30 sec pour les premières TX")
-    print("   • Les messages de debug s'affichent en temps réel")
-    print("   • Le dashboard se lance après 5 secondes")
+    print("   • Wait 10-30 sec for the first transactions")
+    print("   • Debug messages display in real-time")
+    print("   • Dashboard starts after 5 seconds")
     print()
 
-    input("▶️  ENTRÉE pour lancer...\n")
+    input("▶️  PRESS ENTER to launch...\n")
 
     tracker = UltraBlockchainTracker(eth_api_key=ETHERSCAN_API_KEY)
     tracker.run()
